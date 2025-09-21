@@ -2,8 +2,11 @@
   "manifest_version": 3,
   "name": "LeetCode Mentor",
   "version": "0.1",
-  "permissions": ["storage", "scripting", "activeTab"],
-  "host_permissions": ["https://leetcode.com/*"],
+  "permissions": ["storage", "scripting", "activeTab", "tabs"],
+  "host_permissions": [
+    "https://leetcode.com/*",
+    "vscode://*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

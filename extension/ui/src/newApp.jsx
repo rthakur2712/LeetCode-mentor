@@ -1,16 +1,12 @@
-
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
-
-
 const BACKEND_URL = 'http://localhost:3000/mentor';
 
-
 function App() {
-  const [intent, setIntent] = useState(''); 
+  const [intent, setIntent] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -40,7 +36,7 @@ function App() {
       }
     };
     setCachedResponses(newCache);
-    
+
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.set({ leetcode_mentor_cache: newCache });
     }
@@ -63,8 +59,8 @@ function App() {
     Explanation: 'explain',
     Solution: 'solution',
     Complexity: 'complexity',
+    "Send to VS Code": 'sendcodetovscode', // new intent label
   };
-
 
   const mockResponses = {
     hint: `Here is a hint for your problem:\n\nTry to use a hash map to store the frequency of each element.\n\n\n` +
@@ -75,56 +71,65 @@ function App() {
       '```cpp\nclass Solution {\npublic:\n    int majorityElement(vector<int>& nums) {\n        unordered_map<int, int> freq;\n        for (int num : nums) freq[num]++;\n        for (auto& [num, count] : freq) {\n            if (count > nums.size() / 2) return num;\n        }\n        return -1;\n    }\n};\n```',
   };
 
+  // Helper: query active tab (wrapped in a Promise)
+  const getActiveTab = () => {
+    return new Promise((resolve, reject) => {
+      if (typeof chrome === 'undefined' || !chrome.tabs) {
+        reject(new Error('chrome.tabs not available'));
+        return;
+      }
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+          return;
+        }
+        if (!tabs || !tabs[0]?.id) {
+          reject(new Error('No active tab found'));
+          return;
+        }
+        resolve(tabs[0]);
+      });
+    });
+  };
+
+  // Helper: send message to background (COPY_TO_VSCODE) and await response
+  const sendToBackground = (payload) => {
+    return new Promise((resolve, reject) => {
+      if (typeof chrome === 'undefined' || !chrome.runtime) {
+        reject(new Error('chrome.runtime not available'));
+        return;
+      }
+      chrome.runtime.sendMessage({ type: 'COPY_TO_VSCODE', payload }, (resp) => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve(resp);
+        }
+      });
+    });
+  };
+
+  // Existing manual copy function (keeps compatibility) - uses user code from content script
   const handleCopyToVSCode = async () => {
     try {
-      const tabs = await new Promise((resolve, reject) => {
-        chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-          if (!tabs[0]?.id) {
-            reject(new Error('No active tab found'));
-            return;
-          }
-          resolve(tabs);
-        });
-      });
-
-      // Get the current problem context
-      const response = await chrome.tabs.sendMessage(tabs[0].id, {type: 'GATHER_CONTEXT'});
+      const tab = await getActiveTab();
+      const response = await chrome.tabs.sendMessage(tab.id, { type: 'GATHER_CONTEXT' });
       console.log('Got response from content script:', response);
-      
       if (!response || !response.userCode) {
         throw new Error('No code found to copy');
       }
 
-      // Send message to VS Code extension
-      console.log('Sending to VS Code:', {
+      const payload = {
         code: response.userCode,
-        problemName: getProblemKey(tabs[0].url),
+        problemName: getProblemKey(tab.url),
         language: 'cpp'
-      });
-      const result = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          type: 'COPY_TO_VSCODE',
-          payload: {
-            code: response.userCode,
-            problemName: getProblemKey(tabs[0].url),
-            language: 'cpp'
-          }
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-          } else {
-            resolve(response);
-          }
-        });
-      });
+      };
 
+      const result = await sendToBackground(payload);
       if (result?.success) {
         setAnswer('Opening VS Code...');
-        // Clear the message after a few seconds
         setTimeout(() => {
-          if (answer === 'Opening VS Code...') {
-            setAnswer('');
-          }
+          setAnswer('');
         }, 3000);
       } else {
         throw new Error('Failed to open VS Code');
@@ -135,8 +140,132 @@ function App() {
     }
   };
 
+  // NEW helper - forward any code string (e.g. mentorText) to background to create file
+  // It also optionally pings the content script for context (keeps existing handshake).
+  const forwardCodeToVSCode = async (codeString) => {
+    try {
+      const tab = await getActiveTab();
+
+      // optional: ensure content script is alive / gather context if you want
+      // we do it to follow your original pattern (and to potentially refresh problem url/context)
+      try {
+        // if content script fails, proceed anyway; it's non-fatal
+        await chrome.tabs.sendMessage(tab.id, { type: 'GATHER_CONTEXT' });
+      } catch (e) {
+        // ignore: content script might not respond but that's fine
+        console.warn('Content script GATHER_CONTEXT failed (non-fatal):', e);
+      }
+
+      const payload = {
+        code: codeString,
+        problemName: getProblemKey(tab.url),
+        language: 'cpp'
+      };
+
+      const resp = await sendToBackground(payload);
+      if (resp?.success) {
+        setAnswer('Opening VS Code...');
+        // clear message after short period
+        setTimeout(() => setAnswer(''), 3000);
+      } else {
+        throw new Error('Background failed to open VS Code');
+      }
+    } catch (err) {
+      console.error('forwardCodeToVSCode error:', err);
+      setError(err.message || 'Failed to forward code to VS Code');
+    }
+  };
+
+  // This calls your backend with intent 'sendcodetovscode',
+  // sets the answer to the returned mentorText and *immediately* forwards it to VS Code.
+  const handleSendCodeToVSCode = async () => {
+    try {
+      setIntent('sendcodetovscode');
+      setLoading(true);
+      setError(null);
+      setAnswer('');
+
+      const tab = await getActiveTab();
+      // gather context to include question if needed
+      const context = await (async () => {
+        try {
+          return await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { type: 'GATHER_CONTEXT' }, (resp) => {
+              if (chrome.runtime.lastError) {
+                // console.warn('GATHER_CONTEXT failed:', chrome.runtime.lastError);
+                return resolve(null); // proceed even if gather fails
+              }
+              resolve(resp || null);
+            });
+          });
+        } catch (e) {
+          return null;
+        }
+      })();
+
+      const payload = {
+        userCode: context?.userCode || '',
+        question: context?.question || '',
+        intent: 'sendcodetovscode',
+        history: [],
+        language: 'C++'
+      };
+
+      // Call backend
+      const resp = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(`Backend error: ${t}`);
+      }
+
+      const data = await resp.json();
+      const mentorText = (typeof data.mentorText === 'string') ? data.mentorText : '';
+
+      // Save to cache (so other intents can reuse it)
+      const problemKey = getProblemKey(tab.url);
+      saveToCache(problemKey, 'sendcodetovscode', mentorText);
+
+      // 1) set the answer shown in UI
+      setAnswer(mentorText || 'No response from backend');
+
+      // 2) Immediately forward that code to background -> which opens VS Code
+      //    NOTE: forwardCodeToVSCode expects raw code string; if your mentorText includes markdown
+      //    or fenced codeblocks, you may want to extract the code portion before forwarding.
+      //    For robustness, strip triple backticks if present.
+      const cleaned = extractCodeFromMentorText(mentorText);
+      await forwardCodeToVSCode(cleaned);
+
+    } catch (err) {
+      console.error('handleSendCodeToVSCode error:', err);
+      setError(err.message || 'Failed during send-to-vscode flow');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Utility: attempt to extract the raw code from mentorText (strip ```cpp ... ``` if present)
+  const extractCodeFromMentorText = (mentorText) => {
+    if (!mentorText) return '';
+    // Try to find triple-backtick blocks first
+    const tripleRe = /```(?:\w+)?\n([\s\S]*?)\n```/m;
+    const m = mentorText.match(tripleRe);
+    if (m && m[1]) return m[1].trim();
+    // Otherwise, return the whole text (could be raw code)
+    return mentorText.trim();
+  };
+
+  // Generic click handler; route to special handler for sendcodetovscode
   const handleClick = async (label, forceRefetch = false) => {
     const mappedIntent = intentMap[label];
+    if (mappedIntent === 'sendcodetovscode') {
+      return handleSendCodeToVSCode();
+    }
+
     setIntent(mappedIntent);
     setError(null);
     setAnswer('');
@@ -151,22 +280,11 @@ function App() {
     }
 
     try {
-      // Get current tab URL to identify the problem
-      const tabs = await new Promise((resolve, reject) => {
-        chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-          if (!tabs[0]?.id) {
-            reject(new Error('No active tab found'));
-            return;
-          }
-          resolve(tabs);
-        });
-      });
-      
-      const currentUrl = tabs[0].url;
+      const tab = await getActiveTab();
+      const currentUrl = tab.url;
       const problemKey = getProblemKey(currentUrl);
       setCurrentProblem(problemKey);
 
-      // Check if we have cached response (skip if force refetch)
       if (!forceRefetch) {
         const cachedResponse = getCachedResponse(problemKey, mappedIntent);
         if (cachedResponse) {
@@ -179,9 +297,8 @@ function App() {
 
       setIsFromCache(false);
 
-      // Send message to content script to gather context
       const context = await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tabs[0].id, {type: 'GATHER_CONTEXT'}, function(response) {
+        chrome.tabs.sendMessage(tab.id, { type: 'GATHER_CONTEXT' }, function (response) {
           if (chrome.runtime.lastError) {
             reject(new Error('Failed to communicate with content script'));
             return;
@@ -193,37 +310,35 @@ function App() {
           resolve(response);
         });
       });
-      
+
       if (!context) throw new Error('Failed to extract context');
-      
 
       const payload = {
         userCode: context.userCode || '',
         question: context.question || '',
         intent: mappedIntent,
-        history: [], // you can persist and load this from localStorage or chrome.storage later
-        language: 'C++', // optionally detect from page
+        history: [],
+        language: 'C++',
       };
-      
 
       const resp = await fetch(BACKEND_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      
+
       if (!resp.ok) {
         const t = await resp.text();
         throw new Error(`Backend error: ${t}`);
       }
-      
+
       const data = await resp.json();
       const mentorResponse = (typeof data.mentorText === 'string') ? data.mentorText : "Not a string\n";
-      
+
       // Save to cache
       saveToCache(problemKey, mappedIntent, mentorResponse);
       setAnswer(mentorResponse);
-      
+
     } catch (e) {
       console.error(e);
       setError(e.message || 'Something went wrong');
@@ -231,7 +346,6 @@ function App() {
       setLoading(false);
     }
   };
-
 
   return (
     <div className="p-6 w-full bg-gradient-to-br from-indigo-100 to-white rounded-xl shadow-lg border border-gray-200">
@@ -261,16 +375,16 @@ function App() {
           );
         })}
       </div>
+
       <button
-        onClick={handleCopyToVSCode}
+        onClick={handleSendCodeToVSCode}
         className="w-full mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg border font-medium transition-colors duration-200 shadow-sm hover:bg-blue-700 flex items-center justify-center gap-2"
       >
         <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M16.5 9.4L7.5 4.21L9 2.5L19.5 9.4V19.5L9 12.6L7.5 14.31L16.5 19.5V9.4Z" fill="currentColor"/>
         </svg>
-        Copy to VS Code
+        Send Code to VS Code
       </button>
-
 
       <div className="mb-4 flex items-center gap-2">
         <label className="text-sm text-gray-600 font-medium">Mock Data:</label>

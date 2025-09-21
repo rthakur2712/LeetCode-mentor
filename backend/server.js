@@ -49,7 +49,25 @@ function summarizeHistory(historyArray = []) {
 // Prompt builder
 function buildPrompt({ userCode, question, intent, history, language }) {
   const hist = summarizeHistory(history);
-  if (intent === 'hint') {
+  if (intent === 'complete_code_for_vscode') {
+    return `
+You are a coding assistant. The user wants a complete, ready-to-run C++ solution for a LeetCode problem, including:
+1. The class Solution
+2. A main() function
+3. Proper input/output handling using cin/cout
+4. Any necessary includes and using namespace std
+
+Problem description:
+${question}
+
+User's code (may be partial):
+\`\`\`
+${userCode}
+\`\`\`
+
+Generate the full C++ code, ready to copy-paste and run. Do NOT include explanations, only the code. Make sure main() reads input and prints output as expected for LeetCode problems.
+`;
+  } else if (intent === 'hint') {
     return `
 You are a patient and effective coding mentor. The user is solving a LeetCode problem. 
 Problem description:
@@ -89,6 +107,20 @@ Provide:
 Conversation history:
 ${hist || '(none)'}
 `;
+  } else if (intent === 'complexity') {
+    return `
+You are a time complexity analyzer. Analyze the following code and provide ONLY the time and space complexity in Big O notation.
+
+User's code (${language || 'unknown language'}):
+\`\`\`
+${userCode}
+\`\`\`
+
+Respond with ONLY the complexity in this exact format:
+Time Complexity: O(...)
+Space Complexity: O(...)
+
+No other text or explanations should be included.`;
   } else if (intent === 'solution') {
     return `
 The user explicitly requested the full solution. Provide a clear, idiomatic implementation in ${language || 'the appropriate language'}.

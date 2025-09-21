@@ -1,0 +1,38 @@
+{
+  "name": "leetcode-mentor",
+  "displayName": "LeetCode Mentor",
+  "version": "0.0.1",
+  "description": "VS Code extension for LeetCode Mentor",
+  "publisher": "rthakur2712",
+  "id": "rthakur2712.leetcode-mentor",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:rthakur2712.leetcode-mentor.createFile",
+    "onUri"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rthakur2712.leetcode-mentor.createFile",
+        "title": "Create LeetCode Solution File"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "echo Skipping compile",
+    "compile": "echo Skipping compile",
+    "watch": "echo Skipping compile"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vscode": "^1.1.37",
+    "@types/vscode": "^1.60.0",
+    "@types/node": "^14.14.37"
+  }
+}
